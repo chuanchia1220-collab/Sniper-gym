@@ -72,7 +72,7 @@ st.session_state.current_question_data = current_q
 if st.session_state.stock_df is None or st.session_state.current_question_data['id'] != current_q['id']:
     with st.spinner(f"Fetching real data for {current_q['ticker']}..."):
         stock_data, index_data = get_real_data(current_q['ticker'], current_q['date'])
-        
+
         if stock_data.empty:
             st.error(f"Failed to fetch data for {current_q['ticker']} on {current_q['date']}. Likely > 30 days old or API issue.")
             # Skip button
@@ -223,7 +223,7 @@ def handle_decision(action):
     # If Pass, PnL is 0.
 
     st.session_state.score['pnl'] += pnl
-    
+
     # Scenario Stats
     s_type = current_q.get("scenario_type", "General")
     if s_type not in st.session_state.scenario_stats:
