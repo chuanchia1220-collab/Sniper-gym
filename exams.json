@@ -1,0 +1,35 @@
+[
+  {
+    "id": "1",
+    "ticker": "2330.TW",
+    "date": "2023-10-27",
+    "timestamp": "09:45",
+    "level": "Easy",
+    "market_context": "Market Support",
+    "correct_action": "Buy",
+    "explanation": "Price broke above VWAP with strong volume. The market index (^TWII) is also trending up, providing a tailwind.",
+    "data_snippet": null
+  },
+  {
+    "id": "2",
+    "ticker": "2603.TW",
+    "date": "2023-11-15",
+    "timestamp": "10:30",
+    "level": "Medium",
+    "market_context": "Market Diving (Headwind)",
+    "correct_action": "Pass",
+    "explanation": "Although price broke VWAP, the market index is diving sharply. This indicates a high risk of a failed breakout (Headwind). Best to stay out.",
+    "data_snippet": null
+  },
+  {
+    "id": "3",
+    "ticker": "3231.TW",
+    "date": "2023-12-05",
+    "timestamp": "11:15",
+    "level": "Hard",
+    "market_context": "False Breakout (Bull Trap)",
+    "correct_action": "Sell",
+    "explanation": "Price spiked above VWAP but immediately showed weakness (long upper wick) and closed back below. This is a classic Bull Trap. Shorting here is the play.",
+    "data_snippet": null
+  }
+]
