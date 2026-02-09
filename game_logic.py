@@ -1,15 +1,17 @@
 import pandas as pd
 import numpy as np
 import json
-import random
+import yfinance as yf
+import streamlit as st
 from logger import log_error
 import datetime
+from datetime import timedelta
 
 EXAMS_FILE = "exams.json"
 
 def load_exam_data(filepath=EXAMS_FILE):
     try:
-        with open(filepath, "r", encoding='utf-8') as f: # Add utf-8 for Chinese characters
+        with open(filepath, "r", encoding='utf-8') as f:
             data = json.load(f)
         return data
     except Exception as e:
@@ -17,95 +19,76 @@ def load_exam_data(filepath=EXAMS_FILE):
         return []
 
 def filter_questions(data, mode):
-    if mode == "Realistic":
+    # If mode is Realistic, return Real questions.
+    # If mode matches 'Real', return Real.
+    if mode == "Realistic" or mode == "Real":
         return [q for q in data if q.get("level") == "Real"]
+    # Fallback for other modes if they exist in JSON
     return [q for q in data if q.get("level") == mode]
 
-def calculate_result(action, question_data):
-    correct_action = question_data.get("correct_action")
-    is_correct = action == correct_action
-    
-    # Enhanced PnL Logic
-    pnl = 0.0
-    if is_correct:
-        if action == "Pass": pnl = 0.0
-        else: pnl = random.uniform(1.5, 6.0) # Reward good trades
-    else:
-        if action == "Pass": pnl = -random.uniform(0.5, 1.5) # Opportunity cost
-        else: pnl = -random.uniform(2.0, 5.0) # Punish bad trades
-        
-    return is_correct, round(pnl, 2)
-
-def generate_mock_data(ticker, date_str, timestamp_str, scenario_type=None, correct_action=None):
+@st.cache_data(ttl=3600) # Cache for 1 hour
+def get_real_data(ticker, date_str):
     """
-    Generates mock data that loosely fits the scenario description.
+    Fetches 1m data for the specific ticker and market index (^TWII) for the given date.
+    Returns (stock_df, index_df).
     """
     try:
-        date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
-        start_time = datetime.datetime.combine(date, datetime.time(9, 0))
-        # End time is slightly after the decision point to show context
-        decision_time = datetime.datetime.strptime(f"{date_str} {timestamp_str}", "%Y-%m-%d %H:%M")
-        end_time = decision_time + datetime.timedelta(minutes=30) 
+        start_date = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+        end_date = start_date + datetime.timedelta(days=1)
         
-        freq = "1min"
-        time_index = pd.date_range(start=start_time, end=end_time, freq=freq)
-        n = len(time_index)
+        start_str = start_date.strftime("%Y-%m-%d")
+        end_str = end_date.strftime("%Y-%m-%d")
+        
+        # 1. Fetch Stock Data
+        stock_df = yf.download(ticker, start=start_str, end=end_str, interval="1m", progress=False)
+        
+        if stock_df.empty:
+            # Try fetching with period="1d" if start/end fails (sometimes yfinance is finicky)
+            # But period="1d" gets today's data. We need historical.
+            # If empty, maybe date is > 30 days ago.
+            return pd.DataFrame(), pd.DataFrame()
 
-        # --- Smart Mock Logic ---
-        # 1. Base Trend
-        trend = 0.0002 if correct_action == "Buy" else -0.0002 if correct_action == "Sell" else 0
-        
-        # 2. Volatility
-        volatility = 0.002 # 0.2% per minute
-        
-        # 3. Generate Returns
-        returns = np.random.normal(loc=trend, scale=volatility, size=n)
-        
-        # **Crucial**: Inject the specific pattern at the decision time
-        decision_idx = time_index.get_loc(decision_time) if decision_time in time_index else n-5
-        
-        # Apply pattern based on action (Simple heuristic)
-        if correct_action == "Buy":
-            # Ramp up before decision
-            returns[decision_idx-3:decision_idx] = 0.005 # Strong push
-        elif correct_action == "Sell":
-            # Fake breakout then drop
-            returns[decision_idx-3] = 0.005
-            returns[decision_idx-1] = -0.008 
+        # Handle MultiIndex
+        if isinstance(stock_df.columns, pd.MultiIndex):
+            stock_df.columns = stock_df.columns.droplevel(1)
+
+        # Localize if needed
+        if stock_df.index.tz is None:
+             stock_df.index = stock_df.index.tz_localize("UTC").tz_convert("Asia/Taipei")
+        else:
+             stock_df.index = stock_df.index.tz_convert("Asia/Taipei")
+
+        # Calculate VWAP
+        stock_df['Typical_Price'] = (stock_df['High'] + stock_df['Low'] + stock_df['Close']) / 3
+        stock_df['VWAP'] = (stock_df['Typical_Price'] * stock_df['Volume']).cumsum() / stock_df['Volume'].cumsum()
+
+        # 2. Fetch Index Data (^TWII)
+        # ^TWII often has delayed data or might not support 1m.
+        # If 1m fails, try 5m or 1h? But we want alignment.
+        # Let's try 1m.
+        index_df = yf.download("^TWII", start=start_str, end=end_str, interval="1m", progress=False)
+
+        if not index_df.empty:
+            if isinstance(index_df.columns, pd.MultiIndex):
+                index_df.columns = index_df.columns.droplevel(1)
+            if index_df.index.tz is None:
+                 index_df.index = index_df.index.tz_localize("UTC").tz_convert("Asia/Taipei")
+            else:
+                 index_df.index = index_df.index.tz_convert("Asia/Taipei")
+
+        # Reset index to allow merging/plotting easily or keep DatetimeIndex
+        stock_df.reset_index(inplace=True)
+        # Rename 'Datetime' to 'Time' for compatibility
+        if 'Datetime' in stock_df.columns:
+            stock_df.rename(columns={'Datetime': 'Time'}, inplace=True)
             
-        start_price = 100.0
-        price_path = start_price * np.cumprod(1 + returns)
-
-        # OHLC Construction
-        opens = price_path
-        closes = price_path * (1 + np.random.normal(0, 0.001, n))
-        highs = np.maximum(opens, closes) * (1 + np.abs(np.random.normal(0, 0.001, n)))
-        lows = np.minimum(opens, closes) * (1 - np.abs(np.random.normal(0, 0.001, n)))
-        
-        # Volume Spike at decision
-        volumes = np.random.randint(100, 1000, size=n)
-        volumes[decision_idx-2:decision_idx+1] = np.random.randint(2000, 5000, size=3)
-
-        stock_df = pd.DataFrame({
-            "Time": time_index,
-            "Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": volumes
-        })
-
-        # VWAP
-        typical_price = (stock_df["High"] + stock_df["Low"] + stock_df["Close"]) / 3
-        stock_df["VWAP"] = (typical_price * stock_df["Volume"]).cumsum() / stock_df["Volume"].cumsum()
-
-        # Mock Index
-        index_start = 16000.0
-        index_returns = np.random.normal(loc=0, scale=0.001, size=n)
-        if "Tailwind" in str(scenario_type): index_returns += 0.0002
-        elif "Headwind" in str(scenario_type): index_returns -= 0.0002
-            
-        index_path = index_start * np.cumprod(1 + index_returns)
-        index_df = pd.DataFrame({"Time": time_index, "Close": index_path})
+        if not index_df.empty:
+            index_df.reset_index(inplace=True)
+            if 'Datetime' in index_df.columns:
+                index_df.rename(columns={'Datetime': 'Time'}, inplace=True)
 
         return stock_df, index_df
 
     except Exception as e:
-        log_error(e, f"generate_mock_data for {ticker}")
+        log_error(e, f"get_real_data for {ticker} on {date_str}")
         return pd.DataFrame(), pd.DataFrame()
